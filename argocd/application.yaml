@@ -17,18 +17,22 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/your-org/ProjectX.git
+    repoURL: https://github.com/Hiresh98/ProjectX.git
     targetRevision: main
     path: helm/projectx
     helm:
       valueFiles:
         - values.yaml
-      # Override image at deploy time; replace with your ECR URL/tag.
+      # Deploy-time overrides (env-specific values, not committed to values.yaml).
       parameters:
         - name: image.repository
-          value: REPLACE_WITH_ECR_URL
+          value: 066113723569.dkr.ecr.ap-south-1.amazonaws.com/projectx/app
         - name: image.tag
           value: latest
+        - name: database.host
+          value: projectx-dev-pg.c100i2o684uw.ap-south-1.rds.amazonaws.com
+        - name: database.existingSecret
+          value: projectx-db
   destination:
     server: https://kubernetes.default.svc
     namespace: projectx
