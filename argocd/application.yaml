@@ -1,0 +1,40 @@
+# GitOps deployment of the app via Argo CD.
+#
+# This is OPTIONAL. The up script deploys the app directly with Helm so the
+# stack works out-of-the-box without GitHub. To switch to full GitOps:
+#   1. Push this repo to GitHub.
+#   2. Edit repoURL below to your repo.
+#   3. Set the ECR image + DB values (or commit them into helm/projectx/values.yaml).
+#   4. kubectl apply -f argocd/application.yaml
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: projectx
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/your-org/ProjectX.git
+    targetRevision: main
+    path: helm/projectx
+    helm:
+      valueFiles:
+        - values.yaml
+      # Override image at deploy time; replace with your ECR URL/tag.
+      parameters:
+        - name: image.repository
+          value: REPLACE_WITH_ECR_URL
+        - name: image.tag
+          value: latest
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: projectx
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

@@ -1,0 +1,58 @@
+name: App (Build & Deploy)
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", "helm/**", ".github/workflows/app.yml"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-south-1
+  CLUSTER_NAME: projectx-dev-eks
+  ECR_REPO: projectx/app
+  NAMESPACE: projectx
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/$ECR_REPO:${GITHUB_SHA::7}"
+          docker build -t "$IMAGE" -t "$REGISTRY/$ECR_REPO:latest" ./app
+          docker push "$IMAGE"
+          docker push "$REGISTRY/$ECR_REPO:latest"
+          echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "ECR_URL=$REGISTRY/$ECR_REPO" >> "$GITHUB_ENV"
+
+      - name: Setup tools
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Deploy with Helm
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+          helm upgrade --install projectx ./helm/projectx \
+            --namespace "$NAMESPACE" --create-namespace \
+            --set image.repository="$ECR_URL" \
+            --set image.tag="$IMAGE_TAG" \
+            --set database.existingSecret=projectx-db \
+            --wait --timeout 5m

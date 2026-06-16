@@ -1,0 +1,52 @@
+name: Infra (Terraform)
+
+on:
+  pull_request:
+    paths: ["terraform/**", ".github/workflows/infra.yml"]
+  push:
+    branches: [main]
+    paths: ["terraform/**"]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for AWS OIDC
+  contents: read
+  pull-requests: write
+
+env:
+  AWS_REGION: ap-south-1
+  TF_DIR: terraform/envs/dev
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Format check
+        run: terraform -chdir=$TF_DIR fmt -check -recursive
+        continue-on-error: true
+
+      - name: Init
+        run: terraform -chdir=$TF_DIR init -input=false
+
+      - name: Validate
+        run: terraform -chdir=$TF_DIR validate
+
+      - name: Plan
+        if: github.event_name == 'pull_request'
+        run: terraform -chdir=$TF_DIR plan -input=false -no-color
+
+      - name: Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform -chdir=$TF_DIR apply -auto-approve -input=false

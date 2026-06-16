@@ -1,0 +1,66 @@
+# Default values for the ProjectX app chart.
+# The up scripts override image.repository, image.tag and ingress.* at install time.
+
+replicaCount: 1
+
+image:
+  repository: REPLACE_WITH_ECR_URL
+  tag: latest
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: "projectx"
+
+serviceAccount:
+  create: true
+  name: projectx
+
+podAnnotations: {}
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+# Ingress is fronted by the AWS Load Balancer Controller (internet-facing ALB).
+ingress:
+  enabled: true
+  className: alb
+  # group.name lets multiple ingresses share one ALB (cost saving).
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+    alb.ingress.kubernetes.io/group.name: projectx
+  host: ""   # optional: set a Route53/own domain; empty = ALB DNS only
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Horizontal Pod Autoscaler: min 1 / max 3 (as requested), CPU-based.
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 50
+
+# Database connection. dbHost empty => app runs without DB.
+# The up script creates the `projectx-db` secret from Terraform outputs and
+# sets database.existingSecret to it.
+database:
+  host: ""
+  port: "5432"
+  name: "projectx"
+  user: "projectx"
+  existingSecret: ""        # k8s secret containing key DB_PASSWORD
+  passwordSecretKey: "DB_PASSWORD"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
