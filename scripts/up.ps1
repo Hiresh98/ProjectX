@@ -56,7 +56,10 @@ Section "Terraform apply (infrastructure)"
 Push-Location $TfDir
 try {
   terraform init -input=false
-  terraform apply -auto-approve -input=false
+  # enable_compute=true provisions the costly layer (EKS/NAT/nodes/IRSA). If a
+  # prior cost-saving down.ps1 left the free layer (VPC/ECR/RDS) in place, this
+  # reuses it and only rebuilds compute.
+  terraform apply -auto-approve -input=false -var="enable_compute=true"
   $tf = terraform output -json | ConvertFrom-Json
 }
 finally { Pop-Location }

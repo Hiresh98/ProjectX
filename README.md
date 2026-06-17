@@ -101,22 +101,40 @@ placed, Cluster Autoscaler adds nodes (up to 3).
 
 ---
 
-## One-click DOWN (deletes everything)
+## One-click DOWN (two modes)
 
 ```powershell
-./scripts/down.ps1            # add -Force to skip the prompt
+./scripts/down.ps1               # cost-saving teardown (default): keeps the free layer
+./scripts/down.ps1 -DestroyAll   # full teardown: destroys EVERYTHING incl. VPC/ECR/RDS
+./scripts/down.ps1 -Force        # skip the confirmation prompt
 ```
-```bash
-./scripts/down.sh             # FORCE=true ./scripts/down.sh to skip prompt
-```
+
+### What the default (cost-saving) teardown does
+
+It runs `terraform apply -var enable_compute=false`, which removes **only the
+resources that bill** and keeps the **free / free-tier layer** running at ~$0:
+
+| Layer | Resources | Cost | Default `down.ps1` |
+|---|---|---|---|
+| **Costly** | EKS control plane, EC2 worker nodes, NAT Gateway + EIP, ALB, IRSA roles | EKS ~$73/mo, NAT ~$33/mo, nodes/ALB extra | **Deleted** |
+| **Free** | VPC, subnets, IGW, route tables, security groups, IAM | Always $0 | **Kept** |
+| **Free-tier** | ECR (images, <500 MB), RDS `db.t3.micro` + 20 GB (your data) | $0 within free-tier limits | **Kept** |
+
+This means your **database data and container images survive**, and the next
+`up.ps1` only rebuilds compute (~10 min instead of ~15) on top of the kept VPC.
+
+Use `-DestroyAll` (runs `terraform destroy`) to wipe everything, including the
+VPC, ECR images and the RDS database.
 
 Teardown order is deliberate: the app/Ingress is removed first so the ALB +
-ENIs are released **before** `terraform destroy`, avoiding the classic stuck-VPC
-problem. After it finishes, glance at the console to confirm no ALB/EIP/ENI is
-left.
+ENIs are released **before** Terraform touches the VPC, avoiding the classic
+stuck-VPC problem. After it finishes, glance at the console to confirm no
+ALB/EIP/ENI is left.
 
-> 💡 Cost tip: EKS control plane (~$0.10/hr) + NAT + ALB + nodes accrue while UP.
-> Run `down` whenever you're not actively testing.
+> 💡 AWS Free Tier note (2026): the always-free services (VPC/IAM) and ECR have
+> no expiry; RDS `db.t3.micro` (750 hrs/mo) and EC2 `t3.micro` are 12-month
+> offers; **EKS and NAT Gateway are never free**, which is why they're the first
+> thing the default teardown removes.
 
 ---
 

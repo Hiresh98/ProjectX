@@ -19,7 +19,7 @@ echo "AWS credentials OK."
 
 section "Terraform apply (infrastructure)"
 terraform -chdir="$TF_DIR" init -input=false
-terraform -chdir="$TF_DIR" apply -auto-approve -input=false
+terraform -chdir="$TF_DIR" apply -auto-approve -input=false -var="enable_compute=true"
 
 tf() { terraform -chdir="$TF_DIR" output -raw "$1"; }
 REGION="$(tf region)"

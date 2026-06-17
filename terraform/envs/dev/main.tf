@@ -30,7 +30,9 @@ module "vpc" {
   private_subnets = local.private_subnets
   public_subnets  = local.public_subnets
 
-  enable_nat_gateway = true
+  # NAT Gateway is NOT free (~$33/mo). It only exists with the compute layer so a
+  # cost-saving teardown (enable_compute=false) removes it while keeping the VPC.
+  enable_nat_gateway = var.enable_compute
   single_nat_gateway = true # one NAT to save cost in the POC
   enable_dns_hostnames = true
   enable_dns_support   = true
@@ -54,6 +56,9 @@ module "vpc" {
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
   version = "~> 20.24"
+
+  # EKS control plane + nodes are the biggest cost; gate them behind the toggle.
+  create = var.enable_compute
 
   cluster_name    = "${local.name}-eks"
   cluster_version = var.cluster_version
@@ -107,6 +112,8 @@ module "lb_controller_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.39"
 
+  count = var.enable_compute ? 1 : 0
+
   role_name                              = "${local.name}-alb-controller"
   attach_load_balancer_controller_policy = true
 
@@ -123,6 +130,8 @@ module "lb_controller_irsa" {
 module "cluster_autoscaler_irsa" {
   source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
   version = "~> 5.39"
+
+  count = var.enable_compute ? 1 : 0
 
   role_name                        = "${local.name}-cluster-autoscaler"
   attach_cluster_autoscaler_policy = true

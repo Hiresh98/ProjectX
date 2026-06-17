@@ -100,6 +100,40 @@ variable "db_username" {
   default     = "projectx"
 }
 
+variable "enable_compute" {
+  description = <<-EOT
+    Toggle for the COSTLY, non-free layer (EKS control plane, EC2 worker nodes,
+    NAT Gateway + EIP, IRSA roles). Set false to tear down everything that bills
+    while keeping the free/free-tier layer (VPC, subnets, IGW, security groups,
+    ECR, RDS db.t3.micro, IAM) running at ~$0. down.ps1 sets this to false for a
+    cost-saving teardown; up.ps1 sets it to true.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "enable_bastion" {
+  description = <<-EOT
+    Create a small SSH bastion (t3.micro, free-tier) in a PUBLIC subnet so local
+    tools like DBeaver can reach the PRIVATE RDS via an SSH tunnel. Independent of
+    enable_compute, so you can keep a $0 free layer + a bastion without EKS/NAT.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "bastion_allowed_cidr" {
+  description = "CIDR allowed to SSH (port 22) to the bastion. Set to 'YOUR_IP/32'."
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "bastion_instance_type" {
+  description = "Bastion instance type (t3.micro is free-tier eligible)."
+  type        = string
+  default     = "t3.micro"
+}
+
 variable "enable_github_oidc" {
   description = "Create the GitHub Actions OIDC provider + CI role."
   type        = bool

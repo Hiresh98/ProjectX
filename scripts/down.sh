@@ -1,15 +1,26 @@
 #!/usr/bin/env bash
-# One-click teardown of the ProjectX EKS stack (deletes everything).
+# Teardown for ProjectX.
+#   ./down.sh                 -> cost-saving teardown (default): removes the costly
+#                                layer (EKS/nodes/NAT/ALB/IRSA), KEEPS the free
+#                                layer (VPC/ECR/RDS/IAM) running at ~$0.
+#   DESTROY_ALL=true ./down.sh -> full teardown: destroys EVERYTHING incl. VPC/ECR/RDS.
+#   FORCE=true ./down.sh       -> skip the confirmation prompt.
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TF_DIR="$REPO_ROOT/terraform/envs/dev"
 FORCE="${FORCE:-false}"
+DESTROY_ALL="${DESTROY_ALL:-false}"
 
 section() { echo -e "\n=== $1 ==="; }
 
+if [ "$DESTROY_ALL" = "true" ]; then
+  PROMPT="FULL teardown: DELETES EVERYTHING incl. VPC, ECR images and RDS DATABASE. Type 'yes': "
+else
+  PROMPT="Cost-saving teardown: deletes EKS/nodes/NAT/ALB, KEEPS VPC/ECR/RDS (free). Type 'yes': "
+fi
 if [ "$FORCE" != "true" ]; then
-  read -r -p "This will DELETE ALL ProjectX AWS resources. Type 'yes' to continue: " ans
+  read -r -p "$PROMPT" ans
   [ "$ans" = "yes" ] || { echo "Aborted."; exit 1; }
 fi
 
@@ -38,11 +49,34 @@ else
   echo "No cluster found in state; proceeding to destroy."
 fi
 
-section "Terraform destroy (infrastructure)"
 terraform -chdir="$TF_DIR" init -input=false >/dev/null
-terraform -chdir="$TF_DIR" destroy -auto-approve -input=false
+if [ "$DESTROY_ALL" = "true" ]; then
+  section "Terraform destroy (EVERYTHING)"
+  terraform -chdir="$TF_DIR" destroy -auto-approve -input=false
+else
+  section "Terraform apply -var enable_compute=false (remove costly layer, keep free layer)"
+  terraform -chdir="$TF_DIR" apply -auto-approve -input=false -var="enable_compute=false"
+fi
+TF_EXIT=$?
 
-echo -e "\n========================================"
-echo " ProjectX is DOWN. All resources destroyed."
-echo " Verify no ALB/EIP/ENI lingers in the AWS console."
-echo "========================================"
+echo ""
+if [ "$TF_EXIT" -ne 0 ]; then
+  echo "========================================"
+  echo " TEARDOWN FAILED (terraform exit code: $TF_EXIT). Resources may still bill."
+  echo "========================================"
+  exit "$TF_EXIT"
+fi
+if [ "$DESTROY_ALL" = "true" ]; then
+  echo "========================================"
+  echo " ProjectX is FULLY DOWN. Everything destroyed."
+  echo " Verify no ALB/EIP/ENI lingers in the AWS console."
+  echo "========================================"
+else
+  echo "========================================"
+  echo " Costly layer removed. Free layer still running (~\$0):"
+  echo "   KEPT : VPC, subnets, IGW, SGs, ECR (images), RDS (data), IAM"
+  echo "   GONE : EKS, EC2 nodes, NAT Gateway, EIP, ALB, IRSA roles"
+  echo " Run ./scripts/up.sh to bring compute back (data/images preserved)."
+  echo " Run DESTROY_ALL=true ./scripts/down.sh to remove the free layer too."
+  echo "========================================"
+fi

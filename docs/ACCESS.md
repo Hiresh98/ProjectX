@@ -154,6 +154,31 @@ Clean up the relay when done:
 kubectl -n projectx delete pod rds-relay
 ```
 
+### 5c. DBeaver via SSH bastion (works even when EKS/compute is DOWN)
+
+Method 5b needs a running cluster. If you've done a cost-saving `down.ps1`
+(EKS gone, RDS still up), use the free-tier SSH bastion instead:
+
+```powershell
+# Creates a t3.micro bastion, locks SSH to your current IP, generates a key,
+# and prints the exact DBeaver settings (Main + SSH tabs).
+.\scripts\db-bastion.ps1
+```
+
+In DBeaver → **New Connection → PostgreSQL**:
+
+- **Main tab:** Host = the RDS endpoint, Port `5432`, Database `projectx`,
+  User `projectx`, Password = `terraform -chdir="terraform/envs/dev" output -raw db_password`.
+- **SSH tab:** tick *Use SSH Tunnel*, Host = bastion public IP, Port `22`,
+  User `ec2-user`, Auth = *Public Key*, Private Key = `terraform/envs/dev/bastion-key.pem`.
+
+DBeaver tunnels through the bastion into the VPC and reaches the private RDS.
+Remove the bastion when finished (RDS + free layer stay intact):
+
+```powershell
+.\scripts\db-bastion.ps1 -Down
+```
+
 ---
 
 ## 6. Argo CD (GitOps UI)

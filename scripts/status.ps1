@@ -48,11 +48,35 @@ $REGION  = terraform -chdir="$TfDir" output -raw region 2>$null
 $CLUSTER = terraform -chdir="$TfDir" output -raw cluster_name 2>$null
 $ECR_URL = terraform -chdir="$TfDir" output -raw ecr_repository_url 2>$null
 $DB_HOST = terraform -chdir="$TfDir" output -raw db_host 2>$null
-if ($CLUSTER) { Line "Terraform state" "OK" "cluster=$CLUSTER region=$REGION" }
-else { Line "Terraform state" "FAIL" "no outputs (infra not deployed?)"; }
+if (-not $REGION) { $REGION = "ap-south-1" }
 
-if (-not $CLUSTER) {
-  Write-Host "`nInfrastructure is not deployed. Run ./scripts/up.ps1 first." -ForegroundColor Yellow
+$baseUp    = [bool]$ECR_URL    # free layer (VPC/ECR/RDS) present
+$computeUp = [bool]$CLUSTER    # costly layer (EKS/NAT/nodes) present
+
+if ($computeUp)  { Line "Terraform state" "OK" "compute UP  cluster=$CLUSTER region=$REGION" }
+elseif ($baseUp) { Line "Terraform state" "WARN" "free layer UP, compute DOWN (cost-saving)" }
+else             { Line "Terraform state" "--" "nothing deployed" }
+
+# Always report the free/free-tier layer when it exists.
+if ($baseUp) {
+  Head "Free layer (kept, ~`$0)"
+  $ecrName = aws ecr describe-repositories --region $REGION --query "repositories[?contains(repositoryUri, 'projectx')].repositoryName | [0]" --output text 2>$null
+  if ($ecrName -and $ecrName -ne "None") { Line "ECR (images)" "OK" $ecrName } else { Line "ECR (images)" "WARN" "not found" }
+  $rdsBase = aws rds describe-db-instances --region $REGION --query "DBInstances[?contains(Endpoint.Address, 'projectx')].DBInstanceStatus | [0]" --output text 2>$null
+  if ($rdsBase -eq "available") { Line "RDS (data)" "OK" "available ($DB_HOST)" }
+  elseif ($rdsBase -and $rdsBase -ne "None") { Line "RDS (data)" "WARN" $rdsBase } else { Line "RDS (data)" "WARN" "not found" }
+}
+
+if (-not $computeUp) {
+  if ($baseUp) {
+    Write-Host "`nCompute layer is DOWN (cost-saving). Free layer (VPC/ECR/RDS) still running at ~`$0." -ForegroundColor Yellow
+    Write-Host "Run ./scripts/up.ps1 to restore compute (data + images preserved)." -ForegroundColor Yellow
+  } else {
+    Write-Host "`nNothing is deployed. Run ./scripts/up.ps1 first." -ForegroundColor Yellow
+  }
+  Write-Host "`n========================================" -ForegroundColor Cyan
+  Write-Host (" PASS: {0}   WARN: {1}   FAIL: {2}" -f $script:pass, $script:warn, $script:fail) -ForegroundColor $(if ($script:fail -gt 0) {"Red"} elseif ($script:warn -gt 0) {"Yellow"} else {"Green"})
+  Write-Host "========================================" -ForegroundColor Cyan
   return
 }
 
