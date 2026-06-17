@@ -19,8 +19,8 @@ Grab the values other steps use:
 
 ```powershell
 $ALB     = kubectl -n projectx get ingress projectx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'
-$DB_HOST = terraform -chdir="terraform/envs/dev" output -raw db_host
-$DB_PASS = terraform -chdir="terraform/envs/dev" output -raw db_password
+$DB_HOST = terraform -chdir="stacks/rds" output -raw db_host
+$DB_PASS = terraform -chdir="stacks/rds" output -raw db_password
 "App URL : http://$ALB"
 "DB host : $DB_HOST"
 ```
@@ -30,7 +30,10 @@ $DB_PASS = terraform -chdir="terraform/envs/dev" output -raw db_password
 ## 1. Quick health of everything
 
 ```powershell
-./scripts/status.ps1
+# Which stacks are deployed (each prints its outputs, or nothing if down):
+foreach ($s in "vpc","ecr","rds","eks","irsa","nat") { "$s :"; terraform -chdir="stacks/$s" output 2>$null }
+# Live cluster view:
+kubectl get nodes ; kubectl -n projectx get deploy,hpa,ingress,pods
 ```
 
 ---
@@ -108,8 +111,8 @@ Use one of these.
 ### 5a. Quick psql session from inside the cluster
 
 ```powershell
-$DB_HOST = terraform -chdir="terraform/envs/dev" output -raw db_host
-$DB_PASS = terraform -chdir="terraform/envs/dev" output -raw db_password
+$DB_HOST = terraform -chdir="stacks/rds" output -raw db_host
+$DB_PASS = terraform -chdir="stacks/rds" output -raw db_password
 
 kubectl run pgcli --rm -it --restart=Never -n projectx `
   --image=postgres:16 `
@@ -130,7 +133,7 @@ SELECT * FROM submissions ORDER BY id DESC LIMIT 10;
 Run a tiny relay pod, then port-forward it so RDS appears on `localhost:5432`:
 
 ```powershell
-$DB_HOST = terraform -chdir="terraform/envs/dev" output -raw db_host
+$DB_HOST = terraform -chdir="stacks/rds" output -raw db_host
 
 # Start a socat relay pod -> RDS:5432
 kubectl -n projectx run rds-relay --image=alpine/socat --restart=Never `
@@ -142,7 +145,7 @@ kubectl -n projectx port-forward pod/rds-relay 5432:5432
 ```
 
 Now connect locally (new terminal). Get the password with
-`terraform -chdir="terraform/envs/dev" output -raw db_password`:
+`terraform -chdir="stacks/rds" output -raw db_password`:
 
 ```
 Host: localhost   Port: 5432   DB: projectx   User: projectx
@@ -156,27 +159,28 @@ kubectl -n projectx delete pod rds-relay
 
 ### 5c. DBeaver via SSH bastion (works even when EKS/compute is DOWN)
 
-Method 5b needs a running cluster. If you've done a cost-saving `down.ps1`
-(EKS gone, RDS still up), use the free-tier SSH bastion instead:
+Method 5b needs a running cluster. If the `eks` stack is down (RDS still up), use
+the free-tier `bastion` stack instead:
 
 ```powershell
-# Creates a t3.micro bastion, locks SSH to your current IP, generates a key,
-# and prints the exact DBeaver settings (Main + SSH tabs).
-.\scripts\db-bastion.ps1
+# Optional: lock SSH to your IP by editing bastion_allowed_cidr, or pass it:
+cd stacks\bastion
+terraform apply -auto-approve -var="bastion_allowed_cidr=$((Invoke-RestMethod https://checkip.amazonaws.com).Trim())/32"
+terraform output    # shows bastion_public_ip + bastion_key_path
 ```
 
 In DBeaver → **New Connection → PostgreSQL**:
 
 - **Main tab:** Host = the RDS endpoint, Port `5432`, Database `projectx`,
-  User `projectx`, Password = `terraform -chdir="terraform/envs/dev" output -raw db_password`.
-- **SSH tab:** tick *Use SSH Tunnel*, Host = bastion public IP, Port `22`,
-  User `ec2-user`, Auth = *Public Key*, Private Key = `terraform/envs/dev/bastion-key.pem`.
+  User `projectx`, Password = `terraform -chdir="stacks/rds" output -raw db_password`.
+- **SSH tab:** tick *Use SSH Tunnel*, Host = `bastion_public_ip`, Port `22`,
+  User `ec2-user`, Auth = *Public Key*, Private Key = `stacks/bastion/bastion-key.pem`.
 
 DBeaver tunnels through the bastion into the VPC and reaches the private RDS.
 Remove the bastion when finished (RDS + free layer stay intact):
 
 ```powershell
-.\scripts\db-bastion.ps1 -Down
+cd stacks\bastion ; .\down.ps1
 ```
 
 ---

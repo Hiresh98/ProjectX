@@ -2,23 +2,21 @@ name: Infra (Terraform)
 
 on:
   pull_request:
-    paths: ["terraform/**", ".github/workflows/infra.yml"]
+    paths: ["stacks/**", ".github/workflows/infra.yml"]
   push:
     branches: [main]
-    paths: ["terraform/**"]
+    paths: ["stacks/**"]
   workflow_dispatch:
 
 permissions:
   id-token: write   # required for AWS OIDC
   contents: read
-  pull-requests: write
 
 env:
   AWS_REGION: ap-south-1
-  TF_DIR: terraform/envs/dev
 
 jobs:
-  terraform:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,26 +25,20 @@ jobs:
         with:
           terraform_version: "1.9.5"
 
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Format check
-        run: terraform -chdir=$TF_DIR fmt -check -recursive
+      # fmt + validate every Terraform stack. Validation does not need cloud
+      # credentials or remote state, so it runs on every PR/push.
+      - name: Format check (all stacks)
+        run: terraform fmt -check -recursive stacks
         continue-on-error: true
 
-      - name: Init
-        run: terraform -chdir=$TF_DIR init -input=false
-
-      - name: Validate
-        run: terraform -chdir=$TF_DIR validate
-
-      - name: Plan
-        if: github.event_name == 'pull_request'
-        run: terraform -chdir=$TF_DIR plan -input=false -no-color
-
-      - name: Apply
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        run: terraform -chdir=$TF_DIR apply -auto-approve -input=false
+      - name: Validate each stack
+        run: |
+          set -e
+          for d in stacks/*/; do
+            if ls "$d"*.tf >/dev/null 2>&1; then
+              echo "::group::validate $d"
+              terraform -chdir="$d" init -backend=false -input=false >/dev/null
+              terraform -chdir="$d" validate
+              echo "::endgroup::"
+            fi
+          done

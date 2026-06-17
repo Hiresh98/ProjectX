@@ -57,25 +57,35 @@ Verify: `aws sts get-caller-identity`
 
 ---
 
-## One-click UP
+## Per-service stacks
+
+Infrastructure is split into independent per-service Terraform stacks under
+[`stacks/`](stacks/README.md) — `vpc`, `nat`, `ecr`, `rds-sg`, `rds`, `eks`,
+`irsa`, `bastion`, `github-oidc`, `iam`, plus script-only `addons` and `app`.
+Each stack has its own `up.ps1 / down.ps1 / up.sh / down.sh` so you can create or
+destroy one service at a time for cost control. See [`stacks/README.md`](stacks/README.md)
+for the full table and dependency order.
+
+## One-click UP (all stacks)
 
 **Windows (PowerShell):**
 
 ```powershell
-./scripts/up.ps1
+cd stacks ; ./up-all.ps1
 ```
 
 **Linux / macOS:**
 
 ```bash
-chmod +x scripts/*.sh
-./scripts/up.sh
+cd stacks && chmod +x */*.sh *.sh && ./up-all.sh
 ```
 
-This provisions all infra, installs add-ons, builds & pushes the image, deploys
-the app, and prints the public URL (~15–20 min on first run, mostly EKS).
+This runs every stack in dependency order
+(`vpc → ecr → rds-sg → rds → nat → eks → irsa → addons → app`), builds & pushes
+the image, deploys the app, and exposes it via an ALB (~15–20 min on first run,
+mostly EKS). To bring up a single service: `cd stacks/eks ; ./up.ps1`.
 
-Open the printed `http://<alb-dns>` to use the form.
+Open the resulting `http://<alb-dns>` (from `kubectl -n projectx get ingress projectx`) to use the form.
 
 ---
 
@@ -104,32 +114,32 @@ placed, Cluster Autoscaler adds nodes (up to 3).
 ## One-click DOWN (two modes)
 
 ```powershell
-./scripts/down.ps1               # cost-saving teardown (default): keeps the free layer
-./scripts/down.ps1 -DestroyAll   # full teardown: destroys EVERYTHING incl. VPC/ECR/RDS
-./scripts/down.ps1 -Force        # skip the confirmation prompt
+cd stacks ; ./down-all.ps1        # cost-saving teardown (default): keeps the free layer
+cd stacks ; ./down-all.ps1 -All   # full teardown: destroys EVERYTHING incl. VPC/ECR/RDS
+```
+```bash
+cd stacks && ./down-all.sh            # cost-saving
+cd stacks && ALL=true ./down-all.sh   # destroy everything
 ```
 
 ### What the default (cost-saving) teardown does
 
-It runs `terraform apply -var enable_compute=false`, which removes **only the
-resources that bill** and keeps the **free / free-tier layer** running at ~$0:
+It destroys only the **billable stacks** (`app`, `addons`, `irsa`, `eks`, `nat`,
+`bastion`) and keeps the **free / free-tier stacks** running at ~$0:
 
-| Layer | Resources | Cost | Default `down.ps1` |
+| Layer | Stacks | Cost | Default `down-all` |
 |---|---|---|---|
-| **Costly** | EKS control plane, EC2 worker nodes, NAT Gateway + EIP, ALB, IRSA roles | EKS ~$73/mo, NAT ~$33/mo, nodes/ALB extra | **Deleted** |
-| **Free** | VPC, subnets, IGW, route tables, security groups, IAM | Always $0 | **Kept** |
-| **Free-tier** | ECR (images, <500 MB), RDS `db.t3.micro` + 20 GB (your data) | $0 within free-tier limits | **Kept** |
+| **Costly** | `eks` (control plane + nodes), `nat`, `irsa`, `addons` (ALB), `app`, `bastion` | EKS ~$73/mo, NAT ~$33/mo, ALB/nodes extra | **Deleted** |
+| **Free** | `vpc`, `rds-sg`, `iam` | Always $0 | **Kept** |
+| **Free-tier** | `ecr` (images, <500 MB), `rds` `db.t3.micro` + 20 GB (your data) | $0 within free-tier limits | **Kept** |
 
 This means your **database data and container images survive**, and the next
-`up.ps1` only rebuilds compute (~10 min instead of ~15) on top of the kept VPC.
+`up-all` only rebuilds compute on top of the kept VPC. You can also destroy a
+single service at a time: `cd stacks/nat ; ./down.ps1`.
 
-Use `-DestroyAll` (runs `terraform destroy`) to wipe everything, including the
-VPC, ECR images and the RDS database.
-
-Teardown order is deliberate: the app/Ingress is removed first so the ALB +
-ENIs are released **before** Terraform touches the VPC, avoiding the classic
-stuck-VPC problem. After it finishes, glance at the console to confirm no
-ALB/EIP/ENI is left.
+Use `-All` / `ALL=true` to wipe everything. The orchestrator removes the `app`
+(and its ALB/ENIs) before the network stacks, avoiding the classic stuck-VPC
+problem. After it finishes, glance at the console to confirm no ALB/EIP/ENI is left.
 
 > 💡 AWS Free Tier note (2026): the always-free services (VPC/IAM) and ECR have
 > no expiry; RDS `db.t3.micro` (750 hrs/mo) and EC2 `t3.micro` are 12-month
@@ -152,9 +162,9 @@ ALB/EIP/ENI is left.
 
 ## CI/CD (optional)
 
-1. Set `enable_github_oidc = true` and `github_repo = "owner/ProjectX"` in
-   `terraform/envs/dev/terraform.tfvars`, then re-run `up` (or `terraform apply`).
-2. Copy the `github_ci_role_arn` output into a GitHub repo secret `AWS_ROLE_ARN`.
+1. Deploy the `github-oidc` stack (set `github_repo` in `stacks/github-oidc/variables.tf`
+   if different): `cd stacks/github-oidc ; ./up.ps1`.
+2. Copy the `ci_role_arn` output into a GitHub repo secret `AWS_ROLE_ARN`.
 3. Grant that role cluster access so `app.yml` can deploy:
    ```bash
    aws eks create-access-entry --cluster-name projectx-dev-eks \
@@ -168,17 +178,18 @@ ALB/EIP/ENI is left.
 
 ## Argo CD (optional GitOps)
 
-`up` installs Argo CD. To manage the app via Git instead of Helm:
+The `addons` stack installs Argo CD. To manage the app via Git instead of Helm:
 edit `argocd/application.yaml` (repoURL + ECR image), then
-`kubectl apply -f argocd/application.yaml`. Get the admin password with the
-command printed at the end of `up`.
+`kubectl apply -f argocd/application.yaml`. Get the admin password with:
+`kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}"`
+(base64-decode it).
 
 ---
 
 ## IAM identities (dev / qa / prod)
 
-Account-global IAM lives in `terraform/iam/` and is **applied separately** from the
-env infra so `down.ps1` never deletes your users, groups, or roles.
+Account-global IAM lives in the `stacks/iam/` stack and is **independent** from the
+other stacks, so `down-all` never deletes your users, groups, or roles.
 
 Pattern: **groups define who you are, roles define what you can do, MFA gates the
 elevation.** Members sit in a group, the group grants permission to assume only its
@@ -196,11 +207,10 @@ credentials/MFA and (with `require_mfa=true`) denies everything else until MFA i
 Apply it (run as your `Admin` user):
 
 ```powershell
-terraform -chdir=terraform/iam init
-terraform -chdir=terraform/iam apply
+cd stacks\iam ; .\up.ps1
 ```
 
-To also create the users, edit `terraform/iam/terraform.tfvars`:
+To also create the users, edit `stacks/iam/terraform.tfvars`:
 
 ```hcl
 create_users = true
