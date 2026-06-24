@@ -1,0 +1,17 @@
+node_modules
+dist
+coverage
+
+# Env files (VITE_* are passed as build args instead)
+.env
+.env.*
+!.env.example
+
+# Local / VCS / editor
+.git
+.gitignore
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+README.md
